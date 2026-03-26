@@ -151,6 +151,20 @@ export class PolymarketApi {
     };
   }
 
+  async getMarketFeeRate(tokenId: string): Promise<number> {
+    const url = `${this.clobUrl}/markets/${encodeURIComponent(tokenId)}`;
+    try {
+      const res = await fetch(url);
+      if (res.ok) {
+        const json = (await res.json()) as { taker_base_fee?: string };
+        const fee = Number(json.taker_base_fee ?? 0);
+        if (fee > 0) return fee;
+      }
+    } catch (_) {}
+    // fallback: fetch by book endpoint to find the market
+    return 1000; // default taker fee for 15m markets
+  }
+
   async placeMarketOrder(
     tokenId: string,
     amount: number,
@@ -159,7 +173,10 @@ export class PolymarketApi {
     negRisk: boolean = false
   ): Promise<OrderResponse> {
     const priceSide = side === "BUY" ? "SELL" : "BUY"; // we pay the ask / receive the bid
-    const marketPrice = await this.getPrice(tokenId, priceSide);
+    const [marketPrice, feeRateBps] = await Promise.all([
+      this.getPrice(tokenId, priceSide),
+      this.getMarketFeeRate(tokenId),
+    ]);
     const size = Math.round(amount * 10000) / 10000;
     let price = marketPrice;
     if (side === "SELL") {
@@ -176,6 +193,7 @@ export class PolymarketApi {
         price,
         side: sideEnum,
         size,
+        feeRateBps,
       },
       tickSizeResolved as "0.001" | "0.01" | "0.1" | "0.0001"
     );

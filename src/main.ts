@@ -5,11 +5,12 @@ import { DumpHedgeTrader } from "./dumpHedgeTrader";
 import { initHistoryLog, logPrintln } from "./logger";
 import type { Market } from "./models";
 
-function parseArgs(): { simulation: boolean } {
+function parseArgs(): { forceProduction: boolean; forceSimulation: boolean } {
   const args = process.argv.slice(2);
-  const production = args.includes("--production");
-  const simulation = production ? false : (args.includes("--simulation") || true);
-  return { simulation };
+  return {
+    forceProduction: args.includes("--production"),
+    forceSimulation: args.includes("--simulation"),
+  };
 }
 
 async function discoverMarketForAsset(
@@ -87,7 +88,7 @@ async function main(): Promise<void> {
 
   const args = parseArgs();
   const config = loadConfig();
-  const simulation = args.simulation !== false ? config.simulation : !config.simulation;
+  const simulation = args.forceProduction ? false : args.forceSimulation ? true : config.simulation;
 
   console.error("Starting Polymarket Hedge Trading Bot");
   console.error("Mode:", simulation ? "SIMULATION" : "PRODUCTION");

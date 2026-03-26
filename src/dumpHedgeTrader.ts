@@ -61,6 +61,7 @@ export class DumpHedgeTrader {
   private stopLossMaxWaitMinutes: number;
   private stopLossPercentage: number;
   private marketStates = new Map<string, MarketState>();
+  private lastBuyFailTime = new Map<string, number>();
   private trades = new Map<string, CycleTrade>();
   private totalProfit = 0;
   private periodProfit = 0;
@@ -160,26 +161,21 @@ export class DumpHedgeTrader {
     if (phase.kind === "WatchingForDump") {
       if (currentTime > phase.windowEndTime) return;
 
+      const lastFail = this.lastBuyFailTime.get(conditionId) ?? 0;
+      if (currentTime - lastFail < 30) return;
+
       if (this.checkDump(s.upPriceHistory, currentTime)) {
         logPrintln(
           `${marketName}: UP dump detected! Buying ${this.shares} shares @ $${upAsk.toFixed(4)}`
         );
         if (s.upTokenId) {
-          await this.executeBuy(
-            marketName,
-            "Up",
-            s.upTokenId,
-            this.shares,
-            upAsk
-          );
-          await this.recordTrade(
-            s.conditionId,
-            periodTimestamp,
-            "Up",
-            s.upTokenId,
-            this.shares,
-            upAsk
-          );
+          try {
+            await this.executeBuy(marketName, "Up", s.upTokenId, this.shares, upAsk);
+          } catch {
+            this.lastBuyFailTime.set(conditionId, currentTime);
+            return;
+          }
+          await this.recordTrade(s.conditionId, periodTimestamp, "Up", s.upTokenId, this.shares, upAsk);
           s.phase = {
             kind: "WaitingForHedge",
             leg1Side: "Up",
@@ -197,21 +193,13 @@ export class DumpHedgeTrader {
           `${marketName}: DOWN dump detected! Buying ${this.shares} shares @ $${downAsk.toFixed(4)}`
         );
         if (s.downTokenId) {
-          await this.executeBuy(
-            marketName,
-            "Down",
-            s.downTokenId,
-            this.shares,
-            downAsk
-          );
-          await this.recordTrade(
-            s.conditionId,
-            periodTimestamp,
-            "Down",
-            s.downTokenId,
-            this.shares,
-            downAsk
-          );
+          try {
+            await this.executeBuy(marketName, "Down", s.downTokenId, this.shares, downAsk);
+          } catch {
+            this.lastBuyFailTime.set(conditionId, currentTime);
+            return;
+          }
+          await this.recordTrade(s.conditionId, periodTimestamp, "Down", s.downTokenId, this.shares, downAsk);
           s.phase = {
             kind: "WaitingForHedge",
             leg1Side: "Down",
