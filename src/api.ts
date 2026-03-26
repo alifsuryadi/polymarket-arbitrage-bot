@@ -14,7 +14,9 @@ import { ClobClient, Side, OrderType } from "@polymarket/clob-client";
 const POLYGON_CHAIN_ID = 137;
 const CTF_CONTRACT = "0x4d97dcd97ec945f40cf65f87097ace5ea0476045";
 const USDC_ADDRESS = "0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174";
-const RPC_URL = "https://polygon-rpc.com";
+const PROXY_WALLET_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052";
+const RPC_URL = "https://polygon-bor-rpc.publicnode.com";
+const POLYGON_NETWORK = { chainId: 137, name: "matic" };
 
 export class PolymarketApi {
   private gammaUrl: string;
@@ -214,41 +216,53 @@ export class PolymarketApi {
   async redeemTokens(
     conditionId: string,
     _tokenId: string,
-    outcome: string
+    _outcome: string
   ): Promise<RedeemResponse> {
     const pk = this.config.privateKey;
     if (!pk) throw new Error("Private key required for redemption. Set PRIVATE_KEY in .env");
     const { ethers } = await import("ethers");
-    const provider = new ethers.providers.JsonRpcProvider(RPC_URL);
+    const provider = new ethers.providers.StaticJsonRpcProvider(RPC_URL, POLYGON_NETWORK);
     const wallet = new ethers.Wallet(pk, provider);
-    const conditionIdClean = conditionId.startsWith("0x") ? conditionId.slice(2) : conditionId;
-    const conditionIdBytes32 = "0x" + conditionIdClean.padStart(64, "0").toLowerCase();
-    const indexSet =
-      outcome.toUpperCase().includes("UP") || outcome === "1"
-        ? 1
-        : 2;
+
+    const conditionIdBytes32 = "0x" + (conditionId.startsWith("0x") ? conditionId.slice(2) : conditionId).padStart(64, "0").toLowerCase();
     const parentCollectionId = "0x" + "0".repeat(64);
-    const collateralTokenBytes32 =
-      "0x" + "0".repeat(24) + USDC_ADDRESS.slice(2).toLowerCase();
-    const arrayOffset = 32 * 4;
-    const arrayLength = 1;
-    const encoded =
-      collateralTokenBytes32.slice(2).padStart(64, "0") +
-      parentCollectionId.slice(2) +
-      conditionIdBytes32.slice(2).padStart(64, "0") +
-      ethers.BigNumber.from(arrayOffset).toHexString().slice(2).padStart(64, "0") +
-      ethers.BigNumber.from(arrayLength).toHexString().slice(2).padStart(64, "0") +
-      ethers.BigNumber.from(indexSet).toHexString().slice(2).padStart(64, "0");
-    const tx = await wallet.sendTransaction({
-      to: CTF_CONTRACT,
-      data: "0x3d7d3f5a" + encoded,
-      value: 0,
-    });
+
+    const ctfInterface = new ethers.utils.Interface([
+      "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)",
+    ]);
+    const callData = ctfInterface.encodeFunctionData("redeemPositions", [
+      USDC_ADDRESS,
+      parentCollectionId,
+      conditionIdBytes32,
+      [1, 2],
+    ]);
+
+    const proxyAddress = this.config.proxyWalletAddress;
+
+    if (!proxyAddress) {
+      const tx = await wallet.sendTransaction({ to: CTF_CONTRACT, data: callData, value: 0 });
+      const receipt = await tx.wait();
+      if (!receipt.status) throw new Error(`Redemption tx failed: ${tx.hash}`);
+      return { success: true, message: `Redeemed. Tx: ${tx.hash}`, transaction_hash: tx.hash };
+    }
+
+    const FACTORY_ABI = [
+      "function proxy(tuple(uint8 typeCode, address to, uint256 value, bytes data)[] calls) external payable returns (bytes[] memory)",
+    ];
+    const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
+    const tx = await factory.proxy(
+      [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
+      {
+        gasLimit: 300000,
+        maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei"),
+        maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
+      }
+    );
     const receipt = await tx.wait();
     if (!receipt.status) throw new Error(`Redemption tx failed: ${tx.hash}`);
     return {
       success: true,
-      message: `Redeemed. Tx: ${tx.hash}`,
+      message: `Redeemed via proxy wallet factory. Tx: ${tx.hash}`,
       transaction_hash: tx.hash,
     };
   }

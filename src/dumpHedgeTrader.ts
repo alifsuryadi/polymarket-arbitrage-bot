@@ -532,12 +532,10 @@ export class DumpHedgeTrader {
       if (trade.upShares > 0.001) {
         if (upIsWinner) {
           if (!this.simulationMode && trade.upTokenId) {
+            logPrintln(`Auto-claiming Up winnings for ${trade.conditionId.slice(0, 8)}...`);
             try {
-              await this.api.redeemTokens(
-                trade.conditionId,
-                trade.upTokenId,
-                "Up"
-              );
+              const result = await this.api.redeemTokens(trade.conditionId, trade.upTokenId, "Up");
+              logPrintln(`Auto-claim Up SUCCESS: ${result.transaction_hash ?? result.message}`);
             } catch (e) {
               console.warn("Failed to redeem Up token:", e);
             }
@@ -559,12 +557,10 @@ export class DumpHedgeTrader {
       if (trade.downShares > 0.001) {
         if (downIsWinner) {
           if (!this.simulationMode && trade.downTokenId) {
+            logPrintln(`Auto-claiming Down winnings for ${trade.conditionId.slice(0, 8)}...`);
             try {
-              await this.api.redeemTokens(
-                trade.conditionId,
-                trade.downTokenId,
-                "Down"
-              );
+              const result = await this.api.redeemTokens(trade.conditionId, trade.downTokenId, "Down");
+              logPrintln(`Auto-claim Down SUCCESS: ${result.transaction_hash ?? result.message}`);
             } catch (e) {
               console.warn("Failed to redeem Down token:", e);
             }
