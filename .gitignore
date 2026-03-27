@@ -4,3 +4,4 @@ history.toml
 .env
 node_modules
 dist
+.trae/

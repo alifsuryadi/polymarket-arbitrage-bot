@@ -36,12 +36,10 @@ export class PolymarketApi {
     const pk = this.config.privateKey;
     if (!pk) throw new Error("Private key is required. Set PRIVATE_KEY in .env");
     this.signer = new Wallet(pk);
-    const tempClient = new ClobClient(this.clobUrl, POLYGON_CHAIN_ID, this.signer);
-    const creds = await tempClient.createOrDeriveApiKey();
-    const funder = this.config.proxyWalletAddress
-      ? this.config.proxyWalletAddress
-      : undefined;
+    const funder = this.config.proxyWalletAddress ?? undefined;
     const sigType = this.config.signatureType;
+    const tempClient = new ClobClient(this.clobUrl, POLYGON_CHAIN_ID, this.signer, undefined, sigType, funder);
+    const creds = await tempClient.createOrDeriveApiKey();
     this.clobClient = new ClobClient(
       this.clobUrl,
       POLYGON_CHAIN_ID,
