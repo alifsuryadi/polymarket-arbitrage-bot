@@ -228,6 +228,9 @@ export class PolymarketApi {
     const ctfInterface = new ethers.utils.Interface([
       "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)",
       "function payoutDenominator(bytes32 conditionId) external view returns (uint256)",
+      "function getCollectionId(bytes32 parent, bytes32 conditionId, uint256 indexSet) external view returns (bytes32)",
+      "function getPositionId(address collateral, bytes32 collectionId) external pure returns (uint256)",
+      "function balanceOf(address account, uint256 id) external view returns (uint256)",
     ]);
 
     // Check on-chain resolution before submitting tx (avoids wasting gas on payout=0)
@@ -236,6 +239,7 @@ export class PolymarketApi {
     if (denom.eq(0)) {
       throw new Error(`CTF_NOT_RESOLVED: Condition ${conditionId.slice(0, 10)} not yet resolved on-chain. Will retry.`);
     }
+
     const callData = ctfInterface.encodeFunctionData("redeemPositions", [
       USDC_ADDRESS,
       parentCollectionId,
@@ -244,39 +248,83 @@ export class PolymarketApi {
     ]);
 
     const proxyAddress = this.config.proxyWalletAddress;
+    const eoaAddress = await wallet.getAddress();
     const txOptions = {
       gasLimit: 300000,
       maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei"),
       maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
     };
 
-    // Try EOA direct redemption first (works for SIGNATURE_TYPE=2)
+    // Check which address holds the tokens
+    let proxyHasTokens = false;
+    let eoaHasTokens = false;
+    for (const indexSet of [1, 2]) {
+      const col = await ctfContract.getCollectionId(parentCollectionId, conditionIdBytes32, indexSet);
+      const pos = await ctfContract.getPositionId(USDC_ADDRESS, col);
+      if (proxyAddress) {
+        const bal = await ctfContract.balanceOf(proxyAddress, pos);
+        if (bal.gt(0)) proxyHasTokens = true;
+      }
+      const eoaBal = await ctfContract.balanceOf(eoaAddress, pos);
+      if (eoaBal.gt(0)) eoaHasTokens = true;
+    }
+
+    if (!proxyHasTokens && !eoaHasTokens) {
+      return { success: true, message: `No tokens to redeem — Polymarket may have auto-processed already.` };
+    }
+
+    // Redeem from proxy wallet (Gnosis Safe) if it has tokens
+    if (proxyHasTokens && proxyAddress) {
+      const SAFE_ABI = [
+        "function getOwners() external view returns (address[])",
+        "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) external payable returns (bool)",
+      ];
+      const safeContract = new ethers.Contract(proxyAddress, SAFE_ABI, provider);
+      let isGnosisSafe = false;
+      try {
+        const owners: string[] = await safeContract.getOwners();
+        if (owners.map((o: string) => o.toLowerCase()).includes(eoaAddress.toLowerCase())) {
+          isGnosisSafe = true;
+        }
+      } catch (_) {}
+
+      if (isGnosisSafe) {
+        const sig = ethers.utils.hexConcat([
+          ethers.utils.hexZeroPad(eoaAddress, 32),
+          ethers.utils.hexZeroPad("0x00", 32),
+          "0x01",
+        ]);
+        const safeWithSigner = new ethers.Contract(proxyAddress, SAFE_ABI, wallet);
+        const tx = await safeWithSigner.execTransaction(
+          CTF_CONTRACT, 0, callData, 0,
+          200000, 0, 0,
+          ethers.constants.AddressZero, ethers.constants.AddressZero,
+          sig, txOptions
+        );
+        const receipt = await tx.wait();
+        if (!receipt.status) throw new Error(`Gnosis Safe execTransaction failed: ${tx.hash}`);
+        return { success: true, message: `Redeemed via Gnosis Safe. Tx: ${tx.hash}`, transaction_hash: tx.hash };
+      }
+
+      // Fallback: ProxyWalletFactory
+      const FACTORY_ABI = [
+        "function proxy(tuple(uint8 typeCode, address to, uint256 value, bytes data)[] calls) external payable returns (bytes[] memory)",
+      ];
+      const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
+      const tx = await factory.proxy(
+        [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
+        txOptions
+      );
+      const receipt = await tx.wait();
+      if (!receipt.status) throw new Error(`ProxyWalletFactory redemption failed: ${tx.hash}`);
+      return { success: true, message: `Redeemed via proxy wallet factory. Tx: ${tx.hash}`, transaction_hash: tx.hash };
+    }
+
+    // EOA direct redemption
     const eoaTx = await wallet.sendTransaction({ to: CTF_CONTRACT, data: callData, value: 0, ...txOptions });
     const eoaReceipt = await eoaTx.wait();
-    if (eoaReceipt.status) {
-      return { success: true, message: `Redeemed via EOA. Tx: ${eoaTx.hash}`, transaction_hash: eoaTx.hash };
-    }
-
-    if (!proxyAddress) {
-      throw new Error(`Redemption tx failed: ${eoaTx.hash}`);
-    }
-
-    // Fallback: try via proxy wallet factory
-    const FACTORY_ABI = [
-      "function proxy(tuple(uint8 typeCode, address to, uint256 value, bytes data)[] calls) external payable returns (bytes[] memory)",
-    ];
-    const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
-    const tx = await factory.proxy(
-      [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
-      txOptions
-    );
-    const receipt = await tx.wait();
-    if (!receipt.status) throw new Error(`Redemption tx failed: ${tx.hash}`);
-    return {
-      success: true,
-      message: `Redeemed via proxy wallet factory. Tx: ${tx.hash}`,
-      transaction_hash: tx.hash,
-    };
+    if (!eoaReceipt.status) throw new Error(`EOA redemption tx failed: ${eoaTx.hash}`);
+    return { success: true, message: `Redeemed via EOA. Tx: ${eoaTx.hash}`, transaction_hash: eoaTx.hash };
   }
 
   async getUserFills(
