@@ -227,7 +227,15 @@ export class PolymarketApi {
 
     const ctfInterface = new ethers.utils.Interface([
       "function redeemPositions(address collateralToken, bytes32 parentCollectionId, bytes32 conditionId, uint256[] indexSets)",
+      "function payoutDenominator(bytes32 conditionId) external view returns (uint256)",
     ]);
+
+    // Check on-chain resolution before submitting tx (avoids wasting gas on payout=0)
+    const ctfContract = new ethers.Contract(CTF_CONTRACT, ctfInterface, provider);
+    const denom = await ctfContract.payoutDenominator(conditionIdBytes32);
+    if (denom.eq(0)) {
+      throw new Error(`CTF_NOT_RESOLVED: Condition ${conditionId.slice(0, 10)} not yet resolved on-chain. Will retry.`);
+    }
     const callData = ctfInterface.encodeFunctionData("redeemPositions", [
       USDC_ADDRESS,
       parentCollectionId,

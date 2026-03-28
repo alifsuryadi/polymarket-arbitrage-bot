@@ -8,7 +8,8 @@
     "start": "node dist/main.js",
     "sim": "node dist/main.js --simulation",
     "prod": "node dist/main.js --production",
-    "dev": "ts-node src/main.ts"
+    "dev": "ts-node src/main.ts",
+    "redeem": "ts-node scripts/redeem.ts"
   },
   "engines": {
     "node": ">=16"

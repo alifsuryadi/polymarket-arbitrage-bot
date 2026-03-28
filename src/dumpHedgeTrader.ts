@@ -514,6 +514,12 @@ export class DumpHedgeTrader {
         continue;
       }
 
+      const hasWinner = market.tokens.some((t) => t.winner);
+      if (!hasWinner) {
+        logPrintln(`Market ${trade.conditionId.slice(0, 8)} closed but not yet resolved (no winner), will retry`);
+        continue;
+      }
+
       logPrintln(`Market ${trade.conditionId.slice(0, 8)} is closed and resolved`);
 
       const upIsWinner = trade.upTokenId
@@ -528,6 +534,7 @@ export class DumpHedgeTrader {
         : false;
 
       let actualProfit = 0;
+      let ctfNotResolvedYet = false;
 
       if (trade.upShares > 0.001) {
         if (upIsWinner) {
@@ -537,15 +544,22 @@ export class DumpHedgeTrader {
               const result = await this.api.redeemTokens(trade.conditionId, trade.upTokenId, "Up");
               logPrintln(`Auto-claim Up SUCCESS: ${result.transaction_hash ?? result.message}`);
             } catch (e) {
-              console.warn("Failed to redeem Up token:", e);
+              if (String(e).includes("CTF_NOT_RESOLVED")) {
+                logPrintln(`CTF not yet resolved on-chain for ${trade.conditionId.slice(0, 8)}, will retry`);
+                ctfNotResolvedYet = true;
+              } else {
+                console.warn("Failed to redeem Up token:", e);
+              }
             }
           }
-          const value = trade.upShares * 1;
-          const cost = trade.upAvgPrice * trade.upShares;
-          actualProfit += value - cost;
-          logPrintln(
-            `Market Closed - Up Winner: ${trade.upShares.toFixed(2)} @ $${trade.upAvgPrice.toFixed(4)} | Profit: $${(value - cost).toFixed(2)}`
-          );
+          if (!ctfNotResolvedYet) {
+            const value = trade.upShares * 1;
+            const cost = trade.upAvgPrice * trade.upShares;
+            actualProfit += value - cost;
+            logPrintln(
+              `Market Closed - Up Winner: ${trade.upShares.toFixed(2)} @ $${trade.upAvgPrice.toFixed(4)} | Profit: $${(value - cost).toFixed(2)}`
+            );
+          }
         } else {
           actualProfit -= trade.upAvgPrice * trade.upShares;
           logPrintln(
@@ -553,6 +567,8 @@ export class DumpHedgeTrader {
           );
         }
       }
+
+      if (ctfNotResolvedYet) continue;
 
       if (trade.downShares > 0.001) {
         if (downIsWinner) {
@@ -562,15 +578,22 @@ export class DumpHedgeTrader {
               const result = await this.api.redeemTokens(trade.conditionId, trade.downTokenId, "Down");
               logPrintln(`Auto-claim Down SUCCESS: ${result.transaction_hash ?? result.message}`);
             } catch (e) {
-              console.warn("Failed to redeem Down token:", e);
+              if (String(e).includes("CTF_NOT_RESOLVED")) {
+                logPrintln(`CTF not yet resolved on-chain for ${trade.conditionId.slice(0, 8)}, will retry`);
+                ctfNotResolvedYet = true;
+              } else {
+                console.warn("Failed to redeem Down token:", e);
+              }
             }
           }
-          const value = trade.downShares * 1;
-          const cost = trade.downAvgPrice * trade.downShares;
-          actualProfit += value - cost;
-          logPrintln(
-            `Market Closed - Down Winner: ${trade.downShares.toFixed(2)} @ $${trade.downAvgPrice.toFixed(4)} | Profit: $${(value - cost).toFixed(2)}`
-          );
+          if (!ctfNotResolvedYet) {
+            const value = trade.downShares * 1;
+            const cost = trade.downAvgPrice * trade.downShares;
+            actualProfit += value - cost;
+            logPrintln(
+              `Market Closed - Down Winner: ${trade.downShares.toFixed(2)} @ $${trade.downAvgPrice.toFixed(4)} | Profit: $${(value - cost).toFixed(2)}`
+            );
+          }
         } else {
           actualProfit -= trade.downAvgPrice * trade.downShares;
           logPrintln(
@@ -578,6 +601,8 @@ export class DumpHedgeTrader {
           );
         }
       }
+
+      if (ctfNotResolvedYet) continue;
 
       if (trade.expectedProfit !== 0) {
         this.totalProfit = this.totalProfit - trade.expectedProfit + actualProfit;
