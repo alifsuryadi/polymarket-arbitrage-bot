@@ -236,25 +236,31 @@ export class PolymarketApi {
     ]);
 
     const proxyAddress = this.config.proxyWalletAddress;
+    const txOptions = {
+      gasLimit: 300000,
+      maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei"),
+      maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
+    };
 
-    if (!proxyAddress) {
-      const tx = await wallet.sendTransaction({ to: CTF_CONTRACT, data: callData, value: 0 });
-      const receipt = await tx.wait();
-      if (!receipt.status) throw new Error(`Redemption tx failed: ${tx.hash}`);
-      return { success: true, message: `Redeemed. Tx: ${tx.hash}`, transaction_hash: tx.hash };
+    // Try EOA direct redemption first (works for SIGNATURE_TYPE=2)
+    const eoaTx = await wallet.sendTransaction({ to: CTF_CONTRACT, data: callData, value: 0, ...txOptions });
+    const eoaReceipt = await eoaTx.wait();
+    if (eoaReceipt.status) {
+      return { success: true, message: `Redeemed via EOA. Tx: ${eoaTx.hash}`, transaction_hash: eoaTx.hash };
     }
 
+    if (!proxyAddress) {
+      throw new Error(`Redemption tx failed: ${eoaTx.hash}`);
+    }
+
+    // Fallback: try via proxy wallet factory
     const FACTORY_ABI = [
       "function proxy(tuple(uint8 typeCode, address to, uint256 value, bytes data)[] calls) external payable returns (bytes[] memory)",
     ];
     const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
     const tx = await factory.proxy(
       [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
-      {
-        gasLimit: 300000,
-        maxPriorityFeePerGas: ethers.utils.parseUnits("30", "gwei"),
-        maxFeePerGas: ethers.utils.parseUnits("200", "gwei"),
-      }
+      txOptions
     );
     const receipt = await tx.wait();
     if (!receipt.status) throw new Error(`Redemption tx failed: ${tx.hash}`);
