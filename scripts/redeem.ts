@@ -135,15 +135,52 @@ async function main() {
   };
 
   if (useProxy && proxyWalletAddress) {
-    console.log("Submitting via ProxyWalletFactory...");
-    const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
-    const tx = await factory.proxy(
-      [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
-      txOptions
-    );
-    console.log(`Tx submitted: ${tx.hash}`);
-    const receipt = await tx.wait();
-    console.log(receipt.status ? "✅ SUCCESS" : "❌ FAILED");
+    // Detect proxy type: Gnosis Safe or ProxyWalletFactory
+    const SAFE_ABI = [
+      "function getOwners() external view returns (address[])",
+      "function nonce() external view returns (uint256)",
+      "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) external payable returns (bool)",
+    ];
+    const safeContract = new ethers.Contract(proxyWalletAddress, SAFE_ABI, provider);
+    let isGnosisSafe = false;
+    try {
+      const owners = await safeContract.getOwners();
+      if (owners.map((o: string) => o.toLowerCase()).includes(eoaAddress.toLowerCase())) {
+        isGnosisSafe = true;
+      }
+    } catch (_) {}
+
+    if (isGnosisSafe) {
+      console.log("Proxy is a Gnosis Safe — using execTransaction...");
+      // Pre-validated signature: r=ownerAddress, s=0, v=1
+      // Safe accepts this when msg.sender == r (the owner)
+      const sig = ethers.utils.hexConcat([
+        ethers.utils.hexZeroPad(eoaAddress, 32),
+        ethers.utils.hexZeroPad("0x00", 32),
+        "0x01",
+      ]);
+      const safeWithSigner = new ethers.Contract(proxyWalletAddress, SAFE_ABI, wallet);
+      const tx = await safeWithSigner.execTransaction(
+        CTF_CONTRACT, 0, callData, 0,
+        200000, 0, 0,
+        ethers.constants.AddressZero, ethers.constants.AddressZero,
+        sig,
+        txOptions
+      );
+      console.log(`Tx submitted: ${tx.hash}`);
+      const receipt = await tx.wait();
+      console.log(receipt.status ? "✅ SUCCESS" : "❌ FAILED");
+    } else {
+      console.log("Submitting via ProxyWalletFactory...");
+      const factory = new ethers.Contract(PROXY_WALLET_FACTORY, FACTORY_ABI, wallet);
+      const tx = await factory.proxy(
+        [{ typeCode: 1, to: CTF_CONTRACT, value: 0, data: callData }],
+        txOptions
+      );
+      console.log(`Tx submitted: ${tx.hash}`);
+      const receipt = await tx.wait();
+      console.log(receipt.status ? "✅ SUCCESS" : "❌ FAILED");
+    }
   } else {
     console.log("Submitting via EOA direct...");
     const tx = await wallet.sendTransaction({ to: CTF_CONTRACT, data: callData, value: 0, ...txOptions });
